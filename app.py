@@ -8,11 +8,11 @@ st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
 language = st.selectbox("🌍 Language", ["English", "Pidgin"])
 
 if language == "Pidgin":
-    title = "🚨 RescueNet Nigeria"
+    title = "🚨 RescueNet Nigeria💰"
     report_btn = "Send Report"
     success_msg = "✅ Report don send!"
 else:
-    title = "🚨 RescueNet Nigeria 🇳🇬"
+    title = "🚨 RescueNet Nigeria 🇳🇬💰"
     report_btn = "Report Incident"
     success_msg = "✅ Incident reported!"
 
