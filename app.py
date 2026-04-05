@@ -4,6 +4,7 @@ from streamlit_folium import st_folium
 import geocoder
 import csv
 import os
+import pandas as pd
 
 # ---------------- PAGE ----------------
 st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
@@ -26,6 +27,16 @@ def save_report(lat, lon, incident, agency, description):
 
         writer.writerow([lat, lon, incident, agency, description])
 
+# ---------------- LOAD DATA ----------------
+def load_reports():
+    if os.path.exists("reports.csv"):
+        return pd.read_csv("reports.csv")
+    else:
+        return pd.DataFrame(columns=["Latitude", "Longitude", "Incident", "Agency", "Description"])
+
+# ---------------- NAVIGATION ----------------
+menu = st.sidebar.selectbox("Menu", ["Report Incident", "Dashboard"])
+
 # ---------------- AUTO LOCATION ----------------
 if "lat" not in st.session_state:
     try:
@@ -40,90 +51,108 @@ if "lat" not in st.session_state:
         st.session_state.lat = None
         st.session_state.lon = None
 
-# ---------------- LAYOUT ----------------
-col1, col2 = st.columns([1, 1])
+# ================= REPORT PAGE =================
+if menu == "Report Incident":
 
-# -------- LEFT: MAP --------
-with col1:
-    st.subheader("📍 Location")
+    col1, col2 = st.columns([1, 1])
 
-    default_lat = 9.0820
-    default_lon = 8.6753
+    # -------- MAP --------
+    with col1:
+        st.subheader("📍 Location")
 
-    lat = st.session_state.lat if st.session_state.lat else default_lat
-    lon = st.session_state.lon if st.session_state.lon else default_lon
+        default_lat = 9.0820
+        default_lon = 8.6753
 
-    m = folium.Map(location=[lat, lon], zoom_start=10)
+        lat = st.session_state.lat if st.session_state.lat else default_lat
+        lon = st.session_state.lon if st.session_state.lon else default_lon
 
-    map_data = st_folium(m, width=500, height=350, key="map")
+        m = folium.Map(location=[lat, lon], zoom_start=10)
 
-    if map_data and map_data.get("last_clicked"):
-        st.session_state.lat = map_data["last_clicked"]["lat"]
-        st.session_state.lon = map_data["last_clicked"]["lng"]
+        map_data = st_folium(m, width=500, height=350, key="map")
 
-    if st.session_state.lat is not None:
-        st.success(f"📍 Location: {st.session_state.lat}, {st.session_state.lon}")
-    else:
-        st.warning("Location not detected")
+        if map_data and map_data.get("last_clicked"):
+            st.session_state.lat = map_data["last_clicked"]["lat"]
+            st.session_state.lon = map_data["last_clicked"]["lng"]
 
-# -------- RIGHT: REPORT --------
-with col2:
-    st.subheader("🚨 Report Incident")
-
-    incident = st.selectbox("Incident Type", [
-        "Road Accident",
-        "Fire Outbreak",
-        "Flood",
-        "Kidnapping",
-        "Critical National Asset Vandalism"
-    ])
-
-    agency = ""
-    agency_number = ""
-
-    if incident == "Road Accident":
-        agency = "🚧 FRSC"
-        agency_number = "122"
-
-    elif incident == "Fire Outbreak":
-        agency = "🚒 Fire Service"
-        agency_number = "112"
-
-    elif incident == "Flood":
-        agency = "🌊 NEMA"
-        agency_number = "0800-ANEMA"
-
-    elif incident == "Kidnapping":
-        agency = "🚓 Police"
-        agency_number = "112"
-
-    elif incident == "Critical National Asset Vandalism":
-        agency = "🛡️ NSCDC"
-        agency_number = "0800-NSCDC"
-
-    st.info(f"{agency} | 📞 {agency_number}")
-
-    description = st.text_area("📝 Describe situation")
-    uploaded_file = st.file_uploader("📸 Upload evidence")
-
-    if st.button("🚀 Report Incident"):
         if st.session_state.lat is not None:
-
-            save_report(
-                st.session_state.lat,
-                st.session_state.lon,
-                incident,
-                agency,
-                description
-            )
-
-            st.success("✅ Report Saved Successfully")
-            st.write(f"📍 Location: {st.session_state.lat}, {st.session_state.lon}")
-            st.write(f"🚨 Agency: {agency}")
-            st.write(f"📞 Contact: {agency_number}")
-
+            st.success(f"📍 {st.session_state.lat}, {st.session_state.lon}")
         else:
-            st.error("⚠️ Location not available")
+            st.warning("Location not detected")
+
+    # -------- FORM --------
+    with col2:
+        st.subheader("🚨 Report Incident")
+
+        incident = st.selectbox("Incident Type", [
+            "Road Accident",
+            "Fire Outbreak",
+            "Flood",
+            "Kidnapping",
+            "Critical National Asset Vandalism"
+        ])
+
+        agency = ""
+        agency_number = ""
+
+        if incident == "Road Accident":
+            agency = "🚧 FRSC"
+            agency_number = "122"
+
+        elif incident == "Fire Outbreak":
+            agency = "🚒 Fire Service"
+            agency_number = "112"
+
+        elif incident == "Flood":
+            agency = "🌊 NEMA"
+            agency_number = "0800-ANEMA"
+
+        elif incident == "Kidnapping":
+            agency = "🚓 Police"
+            agency_number = "112"
+
+        elif incident == "Critical National Asset Vandalism":
+            agency = "🛡️ NSCDC"
+            agency_number = "0800-NSCDC"
+
+        st.info(f"{agency} | 📞 {agency_number}")
+
+        description = st.text_area("📝 Describe situation")
+
+        if st.button("🚀 Report Incident"):
+            if st.session_state.lat is not None:
+
+                save_report(
+                    st.session_state.lat,
+                    st.session_state.lon,
+                    incident,
+                    agency,
+                    description
+                )
+
+                st.success("✅ Report Saved Successfully")
+            else:
+                st.error("⚠️ Location not available")
+
+# ================= DASHBOARD =================
+elif menu == "Dashboard":
+
+    st.subheader("📊 Incident Dashboard")
+
+    data = load_reports()
+
+    if not data.empty:
+        st.dataframe(data)
+
+        # Download button
+        csv_file = data.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Download Reports",
+            csv_file,
+            "reports.csv",
+            "text/csv"
+        )
+    else:
+        st.warning("No reports yet")
 
 # ---------------- FOOTER ----------------
 st.divider()
