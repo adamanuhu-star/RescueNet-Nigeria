@@ -2,27 +2,34 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 
-# PAGE CONFIG
+# ---------------- PAGE ----------------
 st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
 
-# TITLE
-st.title("🚨 RescueNet Nigeria 🇳🇬")
+# ---------------- TITLE ----------------
+st.markdown("# 🚨 RescueNet Nigeria 🇳🇬")
 st.write("AI-Powered Emergency Response System")
+
+# ---------------- SESSION STATE ----------------
+if "lat" not in st.session_state:
+    st.session_state.lat = None
+if "lon" not in st.session_state:
+    st.session_state.lon = None
 
 # ---------------- MAP ----------------
 st.subheader("📍 Select Incident Location")
 
-# Nigeria center
 m = folium.Map(location=[9.0820, 8.6753], zoom_start=6)
 
 map_data = st_folium(m, width=700, height=400)
 
-lat, lon = None, None
-
+# Save clicked location
 if map_data and map_data.get("last_clicked"):
-    lat = map_data["last_clicked"]["lat"]
-    lon = map_data["last_clicked"]["lng"]
-    st.success(f"📍 Selected Location: {lat}, {lon}")
+    st.session_state.lat = map_data["last_clicked"]["lat"]
+    st.session_state.lon = map_data["last_clicked"]["lng"]
+
+# Display selected location
+if st.session_state.lat and st.session_state.lon:
+    st.success(f"📍 Selected Location: {st.session_state.lat}, {st.session_state.lon}")
 
 # ---------------- INCIDENT ----------------
 incident = st.selectbox("🚨 Incident Type", [
@@ -33,7 +40,7 @@ incident = st.selectbox("🚨 Incident Type", [
     "Critical National Asset Vandalism"
 ])
 
-# SMART ROUTING
+# ---------------- SMART ROUTING ----------------
 agency = ""
 agency_number = ""
 
@@ -57,7 +64,7 @@ elif incident == "Critical National Asset Vandalism":
     agency = "🛡️ NSCDC"
     agency_number = "0800-NSCDC"
 
-# SHOW ROUTING
+# Show routing info
 st.info(f"📡 Assigned Agency: {agency} | 📞 {agency_number}")
 
 # ---------------- DETAILS ----------------
@@ -66,9 +73,9 @@ uploaded_file = st.file_uploader("📸 Upload Image/Video Evidence")
 
 # ---------------- REPORT ----------------
 if st.button("🚀 Report Incident"):
-    if lat and lon:
+    if st.session_state.lat and st.session_state.lon:
         st.success("✅ Incident reported successfully!")
-        st.write(f"📍 Location: {lat}, {lon}")
+        st.write(f"📍 Location: {st.session_state.lat}, {st.session_state.lon}")
         st.write(f"🚨 Agency: {agency}")
         st.write(f"📞 Contact: {agency_number}")
     else:
