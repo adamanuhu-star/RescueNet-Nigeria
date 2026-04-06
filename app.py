@@ -5,6 +5,7 @@ import geocoder
 import csv
 import os
 import pandas as pd
+import speech_recognition as sr
 
 # ---------------- PAGE ----------------
 st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
@@ -37,6 +38,17 @@ st.markdown("<h1 style='text-align: center;'>🚨 RescueNet Nigeria 🇳🇬</h1
 st.markdown("<p style='text-align: center;'>Emergency Response System</p>", unsafe_allow_html=True)
 
 st.divider()
+
+# ---------------- VOICE FUNCTION ----------------
+def voice_to_text(audio_file):
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(audio_file) as source:
+            audio = recognizer.record(source)
+        text = recognizer.recognize_google(audio)
+        return text
+    except:
+        return ""
 
 # ---------------- SAVE ----------------
 def save_report(lat, lon, incident, agency, description):
@@ -125,7 +137,21 @@ if menu == "Report Incident":
 
         st.info(f"{agency} | 📞 {number}")
 
-        description = st.text_area("📝 " + translate("Describe situation"))
+        # 🎙️ VOICE INPUT
+        audio = st.file_uploader("🎙️ Upload Voice Note (.wav only)", type=["wav"])
+
+        if audio:
+            st.audio(audio)
+            voice_text = voice_to_text(audio)
+
+            if voice_text:
+                st.success("🧠 Voice converted to text")
+                description = st.text_area("📝 " + translate("Describe situation"), value=voice_text)
+            else:
+                st.warning("Voice not clear, type manually")
+                description = st.text_area("📝 " + translate("Describe situation"))
+        else:
+            description = st.text_area("📝 " + translate("Describe situation"))
 
         # 📷 IMAGE
         image = st.file_uploader("📷 Upload Image", type=["jpg", "png", "jpeg"])
