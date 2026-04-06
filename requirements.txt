@@ -3,3 +3,5 @@ folium
 streamlit-folium
 geocoder
 pandas
+speechrecognition
+pydub
