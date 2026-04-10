@@ -10,6 +10,12 @@ import speech_recognition as sr
 # ---------------- PAGE ----------------
 st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
 
+# ---------------- TITLE ----------------
+st.markdown("<h1 style='text-align: center;'>🚨 RescueNet Nigeria 🇳🇬</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>Emergency Response System</p>", unsafe_allow_html=True)
+
+st.divider()
+
 # ---------------- LANGUAGE ----------------
 language = st.sidebar.selectbox(
     "🌍 Language",
@@ -33,22 +39,46 @@ def translate(text):
     }
     return translations.get(text, {}).get(language, text)
 
-# ---------------- TITLE ----------------
-st.markdown("<h1 style='text-align: center;'>🚨 RescueNet Nigeria 🇳🇬</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center;'>Emergency Response System</p>", unsafe_allow_html=True)
-
-st.divider()
-
-# ---------------- VOICE FUNCTION ----------------
+# ---------------- VOICE FIX ----------------
 def voice_to_text(audio_file):
     recognizer = sr.Recognizer()
+
     try:
         with sr.AudioFile(audio_file) as source:
             audio = recognizer.record(source)
+
         text = recognizer.recognize_google(audio)
         return text
-    except:
-        return ""
+
+    except sr.UnknownValueError:
+        return "⚠️ Could not understand audio"
+
+    except sr.RequestError:
+        return "⚠️ Voice service not available"
+
+    except Exception:
+        return "⚠️ Unsupported audio format (use WAV)"
+
+# ---------------- AI DETECTION ----------------
+def detect_incident(text):
+    text = text.lower()
+
+    if "accident" in text or "crash" in text:
+        return "Road Accident", "FRSC", "122"
+
+    elif "fire" in text or "burn" in text:
+        return "Fire Outbreak", "Fire Service", "112"
+
+    elif "flood" in text or "water" in text:
+        return "Flood", "NEMA", "0800-ANEMA"
+
+    elif "kidnap" in text or "abduct" in text:
+        return "Kidnapping", "Police", "112"
+
+    elif "vandal" in text or "pipeline" in text:
+        return "Critical National Asset Vandalism", "NSCDC", "0800-NSCDC"
+
+    return None, None, None
 
 # ---------------- SAVE ----------------
 def save_report(lat, lon, incident, agency, description):
@@ -107,51 +137,66 @@ if menu == "Report Incident":
         if st.session_state.lat:
             st.success(f"📍 {st.session_state.lat}, {st.session_state.lon}")
         else:
-            st.warning("Select location")
+            st.warning("Select location on map")
 
     # -------- FORM --------
     with col2:
         st.subheader("🚨 " + translate("Report Incident"))
 
-        incident = st.selectbox("Incident Type", [
-            "Road Accident",
-            "Fire Outbreak",
-            "Flood",
-            "Kidnapping",
-            "Critical National Asset Vandalism"
-        ])
-
+        incident = None
         agency = ""
         number = ""
-
-        if incident == "Road Accident":
-            agency, number = "FRSC", "122"
-        elif incident == "Fire Outbreak":
-            agency, number = "Fire Service", "112"
-        elif incident == "Flood":
-            agency, number = "NEMA", "0800-ANEMA"
-        elif incident == "Kidnapping":
-            agency, number = "Police", "112"
-        elif incident == "Critical National Asset Vandalism":
-            agency, number = "NSCDC", "0800-NSCDC"
-
-        st.info(f"{agency} | 📞 {number}")
 
         # 🎙️ VOICE INPUT
         audio = st.file_uploader("🎙️ Upload Voice Note (.wav only)", type=["wav"])
 
         if audio:
             st.audio(audio)
+
             voice_text = voice_to_text(audio)
 
-            if voice_text:
+            if "⚠️" in voice_text:
+                st.error(voice_text)
+                description = st.text_area("📝 " + translate("Describe situation"))
+            else:
                 st.success("🧠 Voice converted to text")
                 description = st.text_area("📝 " + translate("Describe situation"), value=voice_text)
-            else:
-                st.warning("Voice not clear, type manually")
-                description = st.text_area("📝 " + translate("Describe situation"))
+
         else:
             description = st.text_area("📝 " + translate("Describe situation"))
+
+        # AI detection
+        if description:
+            auto_incident, auto_agency, auto_number = detect_incident(description)
+
+            if auto_incident:
+                incident = auto_incident
+                agency = auto_agency
+                number = auto_number
+                st.success(f"🚨 Detected: {incident}")
+
+        # Manual fallback
+        if not incident:
+            incident = st.selectbox("Select Incident Type", [
+                "Road Accident",
+                "Fire Outbreak",
+                "Flood",
+                "Kidnapping",
+                "Critical National Asset Vandalism"
+            ])
+
+            if incident == "Road Accident":
+                agency, number = "FRSC", "122"
+            elif incident == "Fire Outbreak":
+                agency, number = "Fire Service", "112"
+            elif incident == "Flood":
+                agency, number = "NEMA", "0800-ANEMA"
+            elif incident == "Kidnapping":
+                agency, number = "Police", "112"
+            elif incident == "Critical National Asset Vandalism":
+                agency, number = "NSCDC", "0800-NSCDC"
+
+        st.info(f"{agency} | 📞 {number}")
 
         # 📷 IMAGE
         image = st.file_uploader("📷 Upload Image", type=["jpg", "png", "jpeg"])
@@ -159,6 +204,7 @@ if menu == "Report Incident":
         # 🎥 VIDEO
         video = st.file_uploader("🎥 Upload Video", type=["mp4", "mov"])
 
+        # SUBMIT
         if st.button("🚀 Report Incident"):
             if st.session_state.lat is not None:
 
