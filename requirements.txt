@@ -3,6 +3,4 @@ folium
 streamlit-folium
 geocoder
 pandas
-git+https://github.com/openai/whisper.git
-ffmpeg-python
-torch
+openai>=1.0.0
