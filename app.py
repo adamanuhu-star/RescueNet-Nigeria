@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
-import urllib.parse
 import sqlite3
+import secrets
 
 # -----------------------------
-# DATABASE INIT
+# DATABASE
 # -----------------------------
 conn = sqlite3.connect("rescuenet.db", check_same_thread=False)
 c = conn.cursor()
@@ -14,9 +14,10 @@ c = conn.cursor()
 c.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT,
+    username TEXT UNIQUE,
     password TEXT,
-    role TEXT
+    role TEXT,
+    verified INTEGER DEFAULT 0
 )
 """)
 
@@ -33,84 +34,103 @@ CREATE TABLE IF NOT EXISTS reports (
 )
 """)
 
+c.execute("""
+CREATE TABLE IF NOT EXISTS reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT,
+    token TEXT,
+    expires TEXT
+)
+""")
+
 conn.commit()
 
 # -----------------------------
-# PAGE CONFIG
+# CONFIG
 # -----------------------------
 st.set_page_config(page_title="RescueNet Nigeria 🇳🇬", layout="wide")
 st.title("🚨 RescueNet Nigeria 🇳🇬")
 
 # -----------------------------
-# PASSWORD HASH
+# HELPERS
 # -----------------------------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# -----------------------------
-# AUTH FUNCTIONS
-# -----------------------------
 def create_user(username, password, role="user"):
-    c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-              (username, hash_password(password), role))
-    conn.commit()
+    try:
+        c.execute("INSERT INTO users (username, password, role, verified) VALUES (?, ?, ?, ?)",
+                  (username, hash_password(password), role, 0))
+        conn.commit()
+        return True
+    except:
+        return False
 
 def login_user(username, password):
     c.execute("SELECT * FROM users WHERE username=? AND password=?",
               (username, hash_password(password)))
     return c.fetchone()
 
-# -----------------------------
-# INCIDENT MAP
-# -----------------------------
-AGENCY_MAP = {
-    "Road Accident": "FRSC",
-    "Fire Outbreak": "Fire Service",
-    "Flood": "NEMA",
-    "Kidnapping": "Police",
-    "Critical Asset Vandalism": "NSCDC"
-}
+def create_reset_token(username):
+    token = secrets.token_urlsafe(16)
+    expiry = datetime.now() + timedelta(minutes=15)
 
-AGENCY_PHONES = {
-    "FRSC": "+234XXXXXXXXXX",
-    "Fire Service": "+234XXXXXXXXXX",
-    "NEMA": "+234XXXXXXXXXX",
-    "Police": "+234XXXXXXXXXX",
-    "NSCDC": "+234XXXXXXXXXX"
-}
+    c.execute("INSERT INTO reset_tokens (username, token, expires) VALUES (?, ?, ?)",
+              (username, token, expiry.strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
 
-def send_alert(incident, agency, desc, lat, lon):
-    to_number = AGENCY_PHONES.get(agency)
+    return token
 
-    message = f"""🚨 RescueNet Nigeria 🇳🇬
-Incident: {incident}
-Agency: {agency}
-Location: {lat}, {lon}
+def verify_token(token):
+    c.execute("SELECT username, expires FROM reset_tokens WHERE token=?", (token,))
+    result = c.fetchone()
 
-Details:
-{desc}
-"""
+    if result:
+        username, expires = result
+        if datetime.now() < datetime.strptime(expires, "%Y-%m-%d %H:%M"):
+            return username
+    return None
 
-    encoded = urllib.parse.quote(message)
-
-    return {
-        "whatsapp": f"https://wa.me/{to_number.replace('+','')}?text={encoded}",
-        "call": f"tel:{to_number}"
-    }
+def update_password(username, new_password):
+    c.execute("UPDATE users SET password=? WHERE username=?",
+              (hash_password(new_password), username))
+    conn.commit()
 
 # -----------------------------
-# SESSION STATE
+# SESSION
 # -----------------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
 # -----------------------------
-# AUTH UI
+# RESET PASSWORD VIA LINK
+# -----------------------------
+query_params = st.query_params
+
+if "reset_token" in query_params:
+    token = query_params["reset_token"]
+    username = verify_token(token)
+
+    if username:
+        st.subheader("🔑 Set New Password")
+        new_pwd = st.text_input("New Password", type="password")
+
+        if st.button("Update Password"):
+            update_password(username, new_pwd)
+            st.success("✅ Password updated! Go to login")
+    else:
+        st.error("❌ Invalid or expired token")
+
+    st.stop()
+
+# -----------------------------
+# AUTH
 # -----------------------------
 if not st.session_state.user:
 
-    menu = st.sidebar.selectbox("Menu", ["Login", "Signup"])
+    menu = st.sidebar.selectbox("Menu", ["Login", "Signup", "Forgot Password"])
 
+    # SIGNUP
     if menu == "Signup":
         st.subheader("Create Account")
 
@@ -118,12 +138,17 @@ if not st.session_state.user:
         pwd = st.text_input("Password", type="password")
 
         if st.button("Sign Up"):
-            if user and pwd:
-                create_user(user, pwd)
-                st.success("Account created! Login now")
-            else:
-                st.warning("Enter username and password")
+            if create_user(user, pwd):
+                st.success("Account created!")
 
+                if st.button("Verify Account"):
+                    c.execute("UPDATE users SET verified=1 WHERE username=?", (user,))
+                    conn.commit()
+                    st.success("Account verified!")
+            else:
+                st.error("Username already exists")
+
+    # LOGIN
     elif menu == "Login":
         st.subheader("Login")
 
@@ -134,11 +159,27 @@ if not st.session_state.user:
             result = login_user(user, pwd)
 
             if result:
-                st.session_state.user = result
-                st.success("Login successful")
-                st.rerun()
+                if result[4] == 0:
+                    st.warning("Please verify your account first")
+                else:
+                    st.session_state.user = result
+                    st.success("Login successful")
+                    st.rerun()
             else:
                 st.error("Invalid credentials")
+
+    # FORGOT PASSWORD
+    elif menu == "Forgot Password":
+        st.subheader("🔐 Reset Password")
+
+        user = st.text_input("Enter your username")
+
+        if st.button("Generate Reset Link"):
+            token = create_reset_token(user)
+            reset_link = f"?reset_token={token}"
+
+            st.success("✅ Copy link below (valid 15 mins)")
+            st.code(reset_link)
 
 # -----------------------------
 # MAIN APP
@@ -156,106 +197,75 @@ else:
 
     menu = st.sidebar.selectbox("Menu", ["Report Incident", "Dashboard"])
 
-    # =============================
-    # REPORT INCIDENT
-    # =============================
+    # REPORT
     if menu == "Report Incident":
 
         st.subheader("📍 Report Emergency")
 
-        col1, col2 = st.columns(2)
+        incident = st.selectbox("Incident", [
+            "Road Accident", "Fire Outbreak", "Flood",
+            "Kidnapping", "Vandalism"
+        ])
 
-        with col1:
-            incident = st.selectbox("Select Incident", list(AGENCY_MAP.keys()))
-            agency = AGENCY_MAP[incident]
+        desc = st.text_area("Describe incident")
 
-            st.info(f"🚑 Assigned Agency: {agency}")
+        lat = st.number_input("Latitude", value=9.0820)
+        lon = st.number_input("Longitude", value=8.6753)
 
-            desc = st.text_area("Describe incident")
+        st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
 
-        with col2:
-            lat = st.number_input("Latitude", value=9.0820)
-            lon = st.number_input("Longitude", value=8.6753)
-
-            st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}), zoom=6)
-
-        if st.button("🚨 Submit Report"):
-
-            if not desc:
-                st.warning("Please describe the incident")
-            else:
+        if st.button("Submit Report"):
+            if desc:
                 c.execute("""
                 INSERT INTO reports (incident, agency, description, lat, lon, user, time)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (incident, agency, desc, lat, lon, username,
+                """, (incident, incident, desc, lat, lon, username,
                       datetime.now().strftime("%Y-%m-%d %H:%M")))
 
                 conn.commit()
+                st.success("✅ Report submitted")
+            else:
+                st.warning("Describe the incident")
 
-                links = send_alert(incident, agency, desc, lat, lon)
-
-                st.success("✅ Report submitted!")
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.markdown(f"[📲 WhatsApp Alert]({links['whatsapp']})")
-
-                with col2:
-                    st.markdown(f"[📞 Call Agency]({links['call']})")
-
-    # =============================
     # DASHBOARD
-    # =============================
     elif menu == "Dashboard":
 
-        st.subheader("📊 Admin Dashboard" if role == "admin" else "📊 My Reports")
-
-        # ADMIN VIEW
         if role == "admin":
+            tab1, tab2 = st.tabs(["Reports", "Users"])
 
-            tab1, tab2 = st.tabs(["📁 Reports", "👥 Users"])
-
-            # REPORTS
             with tab1:
                 df = pd.read_sql("SELECT * FROM reports", conn)
+                st.dataframe(df)
 
-                if df.empty:
-                    st.info("No reports yet")
-                else:
-                    st.dataframe(df, use_container_width=True)
+                if not df.empty:
                     st.map(df)
 
-                    report_id = st.number_input("Report ID to delete", step=1)
+                rid = st.number_input("Report ID", step=1)
 
-                    if st.button("Delete Report"):
-                        c.execute("DELETE FROM reports WHERE id=?", (report_id,))
-                        conn.commit()
-                        st.success("Report deleted")
-                        st.rerun()
+                if st.button("Delete Report"):
+                    c.execute("DELETE FROM reports WHERE id=?", (rid,))
+                    conn.commit()
+                    st.success("Deleted")
+                    st.rerun()
 
-            # USERS
             with tab2:
-                users_df = pd.read_sql("SELECT id, username, role FROM users", conn)
-                st.dataframe(users_df, use_container_width=True)
+                users = pd.read_sql("SELECT id, username, role FROM users", conn)
+                st.dataframe(users)
 
-                user_id = st.number_input("User ID to delete", step=1)
+                uid = st.number_input("User ID", step=1)
 
-                if user_id == st.session_state.user[0]:
-                    st.warning("You cannot delete yourself")
-                else:
+                if uid != st.session_state.user[0]:
                     if st.button("Delete User"):
-                        c.execute("DELETE FROM users WHERE id=?", (user_id,))
+                        c.execute("DELETE FROM users WHERE id=?", (uid,))
                         conn.commit()
                         st.success("User deleted")
                         st.rerun()
+                else:
+                    st.warning("Cannot delete yourself")
 
-        # NORMAL USER
         else:
             df = pd.read_sql(f"SELECT * FROM reports WHERE user='{username}'", conn)
+            st.dataframe(df)
 
-            if df.empty:
-                st.info("No reports yet")
-            else:
-                st.dataframe(df, use_container_width=True)
+            if not df.empty:
                 st.map(df)
