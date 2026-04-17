@@ -1,13 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-
-# Optional imports (safe loading)
-try:
-    from twilio.rest import Client
-    TWILIO_AVAILABLE = True
-except:
-    TWILIO_AVAILABLE = False
+import urllib.parse
 
 # -----------------------------
 # PAGE CONFIG
@@ -28,47 +22,31 @@ AGENCY_MAP = {
 }
 
 # -----------------------------
-# GET PHONE PER AGENCY
+# AGENCY PHONE NUMBERS
 # -----------------------------
+AGENCY_PHONES = {
+    "FRSC": "+2340000000000",
+    "Fire Service": "+2340000000000",
+    "NEMA": "+2340000000000",
+    "Police": "+2340000000000",
+    "NSCDC": "+2340000000000"
+}
+
 def get_agency_phone(agency):
-    try:
-        if agency == "FRSC":
-            return st.secrets.get("FRSC_PHONE")
-        elif agency == "Fire Service":
-            return st.secrets.get("FIRE_PHONE")
-        elif agency == "NEMA":
-            return st.secrets.get("NEMA_PHONE")
-        elif agency == "Police":
-            return st.secrets.get("POLICE_PHONE")
-        elif agency == "NSCDC":
-            return st.secrets.get("NSCDC_PHONE")
-    except:
-        return None
+    return AGENCY_PHONES.get(agency)
 
 # -----------------------------
-# SEND SMS FUNCTION
+# WHATSAPP + CALL SYSTEM
 # -----------------------------
-def send_sms(incident, agency, desc, lat, lon):
-
-    if not TWILIO_AVAILABLE:
-        return "Twilio not installed"
+def send_alert(incident, agency, desc, lat, lon):
 
     try:
-        sid = st.secrets.get("TWILIO_SID")
-        token = st.secrets.get("TWILIO_AUTH_TOKEN")
-        sender = st.secrets.get("TWILIO_PHONE")
-
-        if not sid or not token or not sender:
-            return "Missing Twilio config"
-
-        client = Client(sid, token)
-
         to_number = get_agency_phone(agency)
 
         if not to_number:
-            return f"No number for {agency}"
+            return "No number available"
 
-        msg = f"""🚨 RescueNet Nigeria 🇳🇬
+        message = f"""🚨 RescueNet Nigeria 🇳🇬
 Incident: {incident}
 Agency: {agency}
 Location: {lat}, {lon}
@@ -77,13 +55,15 @@ Details:
 {desc}
 """
 
-        client.messages.create(
-            body=msg,
-            from_=sender,
-            to=to_number
-        )
+        encoded = urllib.parse.quote(message)
 
-        return "sent"
+        whatsapp_link = f"https://wa.me/{to_number.replace('+','')}?text={encoded}"
+        call_link = f"tel:{to_number}"
+
+        return {
+            "whatsapp": whatsapp_link,
+            "call": call_link
+        }
 
     except Exception as e:
         return str(e)
@@ -142,12 +122,22 @@ if menu == "Report Incident":
 
             st.session_state.reports.append(report)
 
-            sms_status = send_sms(incident, agency, desc, lat, lon)
+            result = send_alert(incident, agency, desc, lat, lon)
 
-            if sms_status == "sent":
-                st.success("✅ Report saved & sent to agency")
+            st.success("✅ Report saved successfully!")
+
+            if isinstance(result, dict):
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown(f"[📲 Send via WhatsApp]({result['whatsapp']})")
+
+                with col2:
+                    st.markdown(f"[📞 Call Agency Now]({result['call']})")
+
             else:
-                st.warning(f"⚠ Report saved, but SMS failed: {sms_status}")
+                st.warning(result)
 
 # =============================
 # DASHBOARD
@@ -163,4 +153,4 @@ elif menu == "Dashboard":
 
         st.dataframe(df, use_container_width=True)
 
-        st.map(df.rename(columns={"lat": "lat", "lon": "lon"}))
+        st.map(df)
