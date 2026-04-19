@@ -6,7 +6,7 @@ import sqlite3
 import secrets
 
 # -----------------------------
-# DATABASE
+# DATABASE SETUP
 # -----------------------------
 conn = sqlite3.connect("rescuenet.db", check_same_thread=False)
 c = conn.cursor()
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS reports (
 )
 """)
 
-# RESET TOKENS
+# RESET TOKENS TABLE
 c.execute("""
 CREATE TABLE IF NOT EXISTS reset_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,13 +113,13 @@ def update_password(username, new_password):
     conn.commit()
 
 # -----------------------------
-# SESSION
+# SESSION STATE
 # -----------------------------
 if "user" not in st.session_state:
     st.session_state.user = None
 
 # -----------------------------
-# RESET PASSWORD LINK HANDLER
+# PASSWORD RESET HANDLER
 # -----------------------------
 query_params = st.query_params
 
@@ -133,20 +133,23 @@ if "reset_token" in query_params:
 
         if st.button("Update Password"):
             update_password(username, new_pwd)
-            st.success("✅ Password updated! Go to login")
+            st.success("✅ Password updated! You can now login")
     else:
         st.error("❌ Invalid or expired token")
 
     st.stop()
 
 # -----------------------------
-# AUTH SECTION
+# AUTH SECTION (FINAL FIXED)
 # -----------------------------
 if not st.session_state.user:
 
-    menu = st.sidebar.selectbox("Menu", ["Login", "Signup", "Forgot Password"])
+    menu = st.sidebar.selectbox(
+        "Menu",
+        ["Login", "Signup", "Verify Account", "Forgot Password"]
+    )
 
-    # ---------------- SIGNUP ----------------
+    # -------- SIGNUP --------
     if menu == "Signup":
         st.subheader("Create Account")
 
@@ -155,11 +158,36 @@ if not st.session_state.user:
 
         if st.button("Sign Up"):
             if create_user(user, pwd):
-                st.success("✅ Account created! Please login to verify")
+                st.success("✅ Account created! Now go to 'Verify Account'")
             else:
                 st.error("Username already exists")
 
-    # ---------------- LOGIN ----------------
+    # -------- VERIFY ACCOUNT --------
+    elif menu == "Verify Account":
+        st.subheader("✅ Verify Your Account")
+
+        user = st.text_input("Enter Username")
+
+        if st.button("Verify Now"):
+            c.execute("SELECT * FROM users WHERE username=?", (user,))
+            result = c.fetchone()
+
+            if result:
+                verified = result[4] if len(result) > 4 else 0
+
+                if verified == 1:
+                    st.info("Account already verified")
+                else:
+                    c.execute(
+                        "UPDATE users SET verified=1 WHERE username=?",
+                        (user,)
+                    )
+                    conn.commit()
+                    st.success("🎉 Account verified! You can now login")
+            else:
+                st.error("User not found")
+
+    # -------- LOGIN --------
     elif menu == "Login":
         st.subheader("Login")
 
@@ -170,19 +198,10 @@ if not st.session_state.user:
             result = login_user(user, pwd)
 
             if result:
-                verified = result[4] if len(result) > 4 else 1
+                verified = result[4] if len(result) > 4 else 0
 
                 if verified == 0:
-                    st.warning("⚠️ Account not verified")
-
-                    if st.button("Verify Account"):
-                        c.execute(
-                            "UPDATE users SET verified=1 WHERE username=?",
-                            (user,)
-                        )
-                        conn.commit()
-                        st.success("✅ Account verified! Now login again")
-
+                    st.warning("⚠️ Account not verified. Go to 'Verify Account'")
                 else:
                     st.session_state.user = result
                     st.success("✅ Login successful")
@@ -190,7 +209,7 @@ if not st.session_state.user:
             else:
                 st.error("Invalid credentials")
 
-    # ---------------- FORGOT PASSWORD ----------------
+    # -------- FORGOT PASSWORD --------
     elif menu == "Forgot Password":
         st.subheader("🔐 Reset Password")
 
@@ -268,12 +287,12 @@ else:
                 if not df.empty:
                     st.map(df)
 
-                rid = st.number_input("Report ID to delete", step=1)
+                rid = st.number_input("Report ID", step=1)
 
                 if st.button("Delete Report"):
                     c.execute("DELETE FROM reports WHERE id=?", (rid,))
                     conn.commit()
-                    st.success("Deleted")
+                    st.success("Report deleted")
                     st.rerun()
 
             # USERS
@@ -281,7 +300,7 @@ else:
                 users = pd.read_sql("SELECT id, username, role FROM users", conn)
                 st.dataframe(users, use_container_width=True)
 
-                uid = st.number_input("User ID to delete", step=1)
+                uid = st.number_input("User ID", step=1)
 
                 if uid != st.session_state.user[0]:
                     if st.button("Delete User"):
