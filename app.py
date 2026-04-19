@@ -11,16 +11,24 @@ import secrets
 conn = sqlite3.connect("rescuenet.db", check_same_thread=False)
 c = conn.cursor()
 
+# USERS TABLE
 c.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
     password TEXT,
-    role TEXT,
-    verified INTEGER DEFAULT 0
+    role TEXT
 )
 """)
 
+# SAFE ADD VERIFIED COLUMN (fix old DB)
+try:
+    c.execute("ALTER TABLE users ADD COLUMN verified INTEGER DEFAULT 0")
+    conn.commit()
+except:
+    pass
+
+# REPORTS TABLE
 c.execute("""
 CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,6 +42,7 @@ CREATE TABLE IF NOT EXISTS reports (
 )
 """)
 
+# RESET TOKENS
 c.execute("""
 CREATE TABLE IF NOT EXISTS reset_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +112,7 @@ if "user" not in st.session_state:
     st.session_state.user = None
 
 # -----------------------------
-# RESET PASSWORD VIA LINK
+# RESET PASSWORD (LINK)
 # -----------------------------
 query_params = st.query_params
 
@@ -159,7 +168,10 @@ if not st.session_state.user:
             result = login_user(user, pwd)
 
             if result:
-                if result[4] == 0:
+                # SAFE VERIFIED CHECK (fix IndexError)
+                verified = result[4] if len(result) > 4 else 1
+
+                if verified == 0:
                     st.warning("Please verify your account first")
                 else:
                     st.session_state.user = result
@@ -233,26 +245,28 @@ else:
         if role == "admin":
             tab1, tab2 = st.tabs(["Reports", "Users"])
 
+            # REPORTS
             with tab1:
                 df = pd.read_sql("SELECT * FROM reports", conn)
-                st.dataframe(df)
+                st.dataframe(df, use_container_width=True)
 
                 if not df.empty:
                     st.map(df)
 
-                rid = st.number_input("Report ID", step=1)
+                rid = st.number_input("Report ID to delete", step=1)
 
                 if st.button("Delete Report"):
                     c.execute("DELETE FROM reports WHERE id=?", (rid,))
                     conn.commit()
-                    st.success("Deleted")
+                    st.success("Report deleted")
                     st.rerun()
 
+            # USERS
             with tab2:
                 users = pd.read_sql("SELECT id, username, role FROM users", conn)
-                st.dataframe(users)
+                st.dataframe(users, use_container_width=True)
 
-                uid = st.number_input("User ID", step=1)
+                uid = st.number_input("User ID to delete", step=1)
 
                 if uid != st.session_state.user[0]:
                     if st.button("Delete User"):
@@ -261,11 +275,11 @@ else:
                         st.success("User deleted")
                         st.rerun()
                 else:
-                    st.warning("Cannot delete yourself")
+                    st.warning("You cannot delete yourself")
 
         else:
             df = pd.read_sql(f"SELECT * FROM reports WHERE user='{username}'", conn)
-            st.dataframe(df)
+            st.dataframe(df, use_container_width=True)
 
             if not df.empty:
                 st.map(df)
