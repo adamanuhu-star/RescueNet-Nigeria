@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import hashlib
 import sqlite3
-import secrets
 import random
 
 # -----------------------------
@@ -19,7 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE,
     password TEXT,
     role TEXT,
-    verified INTEGER DEFAULT 0
+    verified INTEGER DEFAULT 1
 )
 """)
 
@@ -65,7 +64,7 @@ def create_user(username, password):
     try:
         c.execute(
             "INSERT INTO users (username, password, role, verified) VALUES (?, ?, ?, ?)",
-            (username, hash_password(password), "user", 1)  # auto verified after OTP
+            (username, hash_password(password), "user", 1)
         )
         conn.commit()
         return True
@@ -92,10 +91,8 @@ def send_otp(phone):
     )
     conn.commit()
 
-    # Try SMS (Termii optional)
     try:
         import requests
-
         api_key = st.secrets.get("TERMI_API_KEY", "")
 
         if api_key:
@@ -115,7 +112,6 @@ def send_otp(phone):
             raise Exception("No API key")
 
     except:
-        # FALLBACK (ALWAYS WORKS)
         st.warning("⚠️ SMS failed — use OTP below")
         st.code(code)
 
@@ -139,6 +135,58 @@ def verify_otp(phone, code):
     return False
 
 # -----------------------------
+# AGENCY ROUTING
+# -----------------------------
+def route_agency(incident):
+    mapping = {
+        "Road Accident": "FRSC",
+        "Fire": "Fire Service",
+        "Flood": "NSCDC",
+        "Kidnapping": "Police",
+        "Vandalism": "NSCDC"
+    }
+    return mapping.get(incident, "Police")
+
+# -----------------------------
+# ALERT SYSTEM
+# -----------------------------
+def send_alert(agency, message):
+    try:
+        import requests
+        api_key = st.secrets.get("TERMI_API_KEY", "")
+
+        contacts = {
+            "Police": "+2348011111111",
+            "FRSC": "+2348022222222",
+            "NSCDC": "+2348033333333",
+            "Fire Service": "+2348044444444"
+        }
+
+        phone = contacts.get(agency)
+
+        if api_key and phone:
+            url = "https://api.ng.termii.com/api/sms/send"
+
+            payload = {
+                "to": phone,
+                "from": "RescueNet",
+                "sms": message,
+                "type": "plain",
+                "api_key": api_key
+            }
+
+            requests.post(url, json=payload)
+            return "SMS sent"
+        else:
+            st.info(f"🚨 {agency}: {message}")
+            return "Displayed (no SMS)"
+
+    except:
+        st.warning("⚠️ Alert fallback")
+        st.info(f"🚨 {agency}: {message}")
+        return "Fallback used"
+
+# -----------------------------
 # SESSION
 # -----------------------------
 if "user" not in st.session_state:
@@ -151,7 +199,7 @@ if not st.session_state.user:
 
     menu = st.sidebar.selectbox("Menu", ["Login", "Signup"])
 
-    # -------- SIGNUP WITH OTP --------
+    # SIGNUP
     if menu == "Signup":
         st.subheader("Create Account")
 
@@ -164,7 +212,7 @@ if not st.session_state.user:
                 send_otp(phone)
                 st.session_state.phone = phone
             else:
-                st.warning("Enter phone number")
+                st.warning("Enter phone")
 
         otp = st.text_input("Enter OTP")
 
@@ -173,11 +221,11 @@ if not st.session_state.user:
                 if create_user(user, pwd):
                     st.success("🎉 Account created successfully!")
                 else:
-                    st.error("Username already exists")
+                    st.error("Username exists")
             else:
                 st.error("Invalid or expired OTP")
 
-    # -------- LOGIN --------
+    # LOGIN
     elif menu == "Login":
         st.subheader("Login")
 
@@ -200,7 +248,6 @@ if not st.session_state.user:
 else:
 
     username = st.session_state.user[1]
-    role = st.session_state.user[3]
 
     st.sidebar.write(f"👤 {username}")
 
@@ -210,7 +257,7 @@ else:
 
     menu = st.sidebar.selectbox("Menu", ["Report Incident", "Dashboard"])
 
-    # -------- REPORT --------
+    # REPORT
     if menu == "Report Incident":
         st.subheader("📍 Report Emergency")
 
@@ -225,23 +272,34 @@ else:
 
         st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
 
-        if st.button("Submit"):
+        if st.button("Submit Report"):
             if desc:
+                agency = route_agency(incident)
+
                 c.execute("""
                     INSERT INTO reports 
                     (incident, agency, description, lat, lon, user, time)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    incident, incident, desc, lat, lon,
+                    incident,
+                    agency,
+                    desc,
+                    lat,
+                    lon,
                     username,
                     datetime.now().strftime("%Y-%m-%d %H:%M")
                 ))
                 conn.commit()
-                st.success("✅ Report submitted")
+
+                message = f"{incident} at ({lat},{lon}) by {username}"
+                status = send_alert(agency, message)
+
+                st.success(f"✅ Sent to {agency}")
+                st.info(f"Alert: {status}")
             else:
                 st.warning("Enter description")
 
-    # -------- DASHBOARD --------
+    # DASHBOARD
     elif menu == "Dashboard":
         df = pd.read_sql("SELECT * FROM reports", conn)
         st.dataframe(df, use_container_width=True)
