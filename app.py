@@ -1,308 +1,253 @@
 import streamlit as st
-import pandas as pd
-from datetime import datetime, timedelta
-import hashlib
 import sqlite3
-import random
+import pandas as pd
+import pydeck as pdk
+import math
+import time
 
-# -----------------------------
+# -------------------------
 # DATABASE
-# -----------------------------
-conn = sqlite3.connect("rescuenet.db", check_same_thread=False)
+# -------------------------
+conn = sqlite3.connect("rescue.db", check_same_thread=False)
 c = conn.cursor()
 
-# USERS
-c.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,
-    role TEXT,
-    verified INTEGER DEFAULT 1
-)
-""")
-
-# REPORTS
 c.execute("""
 CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     incident TEXT,
-    agency TEXT,
-    description TEXT,
     lat REAL,
     lon REAL,
-    user TEXT,
-    time TEXT
+    status TEXT,
+    priority INTEGER
 )
 """)
 
-# OTP TABLE
 c.execute("""
-CREATE TABLE IF NOT EXISTS otp_codes (
+CREATE TABLE IF NOT EXISTS agents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT,
-    code TEXT,
-    expires TEXT
+    name TEXT,
+    lat REAL,
+    lon REAL,
+    status TEXT,
+    report_id INTEGER
 )
 """)
 
 conn.commit()
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-st.set_page_config(page_title="RescueNet Nigeria 🇳🇬", layout="wide")
+# -------------------------
+# LOGIC FUNCTIONS
+# -------------------------
+def get_priority(incident):
+    priority_map = {
+        "Kidnapping": 5,
+        "Fire Outbreak": 5,
+        "Road Accident": 4,
+        "Flood": 3,
+        "Critical National asset Vandalism": 4
+    }
+    return priority_map.get(incident, 2)
+
+def distance(lat1, lon1, lat2, lon2):
+    return math.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
+
+def move(current, target, step=0.01):
+    if current < target:
+        current += step
+    elif current > target:
+        current -= step
+    return current
+
+def calculate_eta(lat1, lon1, lat2, lon2):
+    dist = distance(lat1, lon1, lat2, lon2)
+    speed = 0.02
+    return round(dist / speed, 2)
+
+def auto_assign(report_id, lat, lon):
+    agents = pd.read_sql("SELECT * FROM agents WHERE status='Available'", conn)
+
+    if agents.empty:
+        return []
+
+    agents["dist"] = agents.apply(
+        lambda x: distance(lat, lon, x["lat"], x["lon"]), axis=1
+    )
+
+    nearest = agents.sort_values("dist").head(2)
+
+    assigned = []
+
+    for _, a in nearest.iterrows():
+        c.execute("""
+            UPDATE agents SET status='Responding', report_id=?
+            WHERE id=?
+        """, (report_id, a["id"]))
+        assigned.append(a["name"])
+
+    conn.commit()
+    return assigned
+
+# -------------------------
+# UI HEADER
+# -------------------------
 st.title("🚨 RescueNet Nigeria 🇳🇬")
 
-# -----------------------------
-# HELPERS
-# -----------------------------
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+menu = st.sidebar.selectbox("Menu", ["Report Incident", "Add Agent", "Dashboard"])
 
-def create_user(username, password):
-    try:
-        c.execute(
-            "INSERT INTO users (username, password, role, verified) VALUES (?, ?, ?, ?)",
-            (username, hash_password(password), "user", 1)
-        )
+# -------------------------
+# REPORT INCIDENT
+# -------------------------
+if menu == "Report Incident":
+
+    st.subheader("Report Emergency")
+
+    incident = st.selectbox("Select Incident", [
+        "Road Accident",
+        "Fire Outbreak",
+        "Flood",
+        "Kidnapping",
+        "Critical National asset Vandalism"
+    ])
+
+    lat = st.number_input("Latitude", value=9.0820)
+    lon = st.number_input("Longitude", value=8.6753)
+
+    if st.button("Submit Report"):
+
+        priority = get_priority(incident)
+
+        c.execute("""
+            INSERT INTO reports (incident, lat, lon, status, priority)
+            VALUES (?, ?, ?, ?, ?)
+        """, (incident, lat, lon, "Pending", priority))
+
+        report_id = c.lastrowid
         conn.commit()
-        return True
-    except:
-        return False
 
-def login_user(username, password):
-    c.execute(
-        "SELECT * FROM users WHERE username=? AND password=?",
-        (username, hash_password(password))
-    )
-    return c.fetchone()
+        assigned = auto_assign(report_id, lat, lon)
 
-# -----------------------------
-# OTP SYSTEM (SMART)
-# -----------------------------
-def send_otp(phone):
-    code = str(random.randint(100000, 999999))
-    expiry = datetime.now() + timedelta(minutes=5)
+        st.success("✅ Incident Reported")
 
-    c.execute(
-        "INSERT INTO otp_codes (phone, code, expires) VALUES (?, ?, ?)",
-        (phone, code, expiry.strftime("%Y-%m-%d %H:%M"))
-    )
-    conn.commit()
-
-    try:
-        import requests
-        api_key = st.secrets.get("TERMI_API_KEY", "")
-
-        if api_key:
-            url = "https://api.ng.termii.com/api/sms/send"
-
-            payload = {
-                "to": phone,
-                "from": "RescueNet",
-                "sms": f"Your OTP is {code}",
-                "type": "plain",
-                "api_key": api_key
-            }
-
-            requests.post(url, json=payload)
-            st.success("📩 OTP sent via SMS")
+        if assigned:
+            st.success(f"🚓 Assigned: {', '.join(assigned)}")
         else:
-            raise Exception("No API key")
+            st.warning("⚠ No available agents")
 
-    except:
-        st.warning("⚠️ SMS failed — use OTP below")
-        st.code(code)
+# -------------------------
+# ADD AGENT
+# -------------------------
+elif menu == "Add Agent":
 
-    return True
+    st.subheader("Add Response Agent")
 
-def verify_otp(phone, code):
-    c.execute(
-        "SELECT code, expires FROM otp_codes WHERE phone=? ORDER BY id DESC LIMIT 1",
-        (phone,)
-    )
-    result = c.fetchone()
+    name = st.text_input("Agent Name")
 
-    if result:
-        db_code, expires = result
+    lat = st.number_input("Start Latitude", value=9.0820)
+    lon = st.number_input("Start Longitude", value=8.6753)
 
-        if datetime.now() > datetime.strptime(expires, "%Y-%m-%d %H:%M"):
-            return False
+    if st.button("Add Agent"):
+        c.execute("""
+            INSERT INTO agents (name, lat, lon, status, report_id)
+            VALUES (?, ?, ?, ?, NULL)
+        """, (name, lat, lon, "Available"))
 
-        return db_code == code
+        conn.commit()
+        st.success("✅ Agent Added")
 
-    return False
+# -------------------------
+# DASHBOARD
+# -------------------------
+elif menu == "Dashboard":
 
-# -----------------------------
-# AGENCY ROUTING
-# -----------------------------
-def route_agency(incident):
-    mapping = {
-        "Road Accident": "FRSC",
-        "Fire": "Fire Service",
-        "Flood": "NSCDC",
-        "Kidnapping": "Police",
-        "Vandalism": "NSCDC"
-    }
-    return mapping.get(incident, "Police")
+    st.subheader("📡 Live Dispatch Map")
 
-# -----------------------------
-# ALERT SYSTEM
-# -----------------------------
-def send_alert(agency, message):
-    try:
-        import requests
-        api_key = st.secrets.get("TERMI_API_KEY", "")
+    placeholder = st.empty()
 
-        contacts = {
-            "Police": "+2348011111111",
-            "FRSC": "+2348022222222",
-            "NSCDC": "+2348033333333",
-            "Fire Service": "+2348044444444"
-        }
+    for _ in range(30):
 
-        phone = contacts.get(agency)
+        reports = pd.read_sql("SELECT * FROM reports", conn)
+        agents = pd.read_sql("SELECT * FROM agents", conn)
 
-        if api_key and phone:
-            url = "https://api.ng.termii.com/api/sms/send"
+        points = []
+        lines = []
 
-            payload = {
-                "to": phone,
-                "from": "RescueNet",
-                "sms": message,
-                "type": "plain",
-                "api_key": api_key
-            }
+        # MOVE AGENTS
+        for _, a in agents.iterrows():
 
-            requests.post(url, json=payload)
-            return "SMS sent"
-        else:
-            st.info(f"🚨 {agency}: {message}")
-            return "Displayed (no SMS)"
+            if a["report_id"]:
+                r = reports[reports["id"] == a["report_id"]]
 
-    except:
-        st.warning("⚠️ Alert fallback")
-        st.info(f"🚨 {agency}: {message}")
-        return "Fallback used"
+                if not r.empty:
+                    target_lat = r.iloc[0]["lat"]
+                    target_lon = r.iloc[0]["lon"]
 
-# -----------------------------
-# SESSION
-# -----------------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
+                    new_lat = move(a["lat"], target_lat)
+                    new_lon = move(a["lon"], target_lon)
 
-# -----------------------------
-# AUTH
-# -----------------------------
-if not st.session_state.user:
+                    c.execute("""
+                        UPDATE agents SET lat=?, lon=? WHERE id=?
+                    """, (new_lat, new_lon, a["id"]))
 
-    menu = st.sidebar.selectbox("Menu", ["Login", "Signup"])
+                    eta = calculate_eta(new_lat, new_lon, target_lat, target_lon)
 
-    # SIGNUP
-    if menu == "Signup":
-        st.subheader("Create Account")
+                    points.append({
+                        "lat": new_lat,
+                        "lon": new_lon,
+                        "color": [0, 0, 255],
+                        "label": f"{a['name']} (ETA: {eta}m)"
+                    })
 
-        user = st.text_input("Username")
-        phone = st.text_input("Phone (+234...)")
-        pwd = st.text_input("Password", type="password")
+                    lines.append({
+                        "start": [new_lon, new_lat],
+                        "end": [target_lon, target_lat]
+                    })
 
-        if st.button("Send OTP"):
-            if phone:
-                send_otp(phone)
-                st.session_state.phone = phone
-            else:
-                st.warning("Enter phone")
+        conn.commit()
 
-        otp = st.text_input("Enter OTP")
+        # INCIDENT POINTS
+        for _, r in reports.iterrows():
+            color = [255, 0, 0]
+            if r["status"] == "Resolved":
+                color = [0, 200, 0]
 
-        if st.button("Verify & Create Account"):
-            if verify_otp(phone, otp):
-                if create_user(user, pwd):
-                    st.success("🎉 Account created successfully!")
-                else:
-                    st.error("Username exists")
-            else:
-                st.error("Invalid or expired OTP")
+            points.append({
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "color": color,
+                "label": f"{r['incident']} (P{r['priority']})"
+            })
 
-    # LOGIN
-    elif menu == "Login":
-        st.subheader("Login")
+        df = pd.DataFrame(points)
 
-        user = st.text_input("Username")
-        pwd = st.text_input("Password", type="password")
+        scatter = pdk.Layer(
+            "ScatterplotLayer",
+            data=df,
+            get_position='[lon, lat]',
+            get_color='color',
+            get_radius=200,
+            pickable=True,
+        )
 
-        if st.button("Login"):
-            result = login_user(user, pwd)
+        line_layer = pdk.Layer(
+            "LineLayer",
+            data=lines,
+            get_source_position="start",
+            get_target_position="end",
+            get_color=[0, 0, 0],
+            get_width=2,
+        )
 
-            if result:
-                st.session_state.user = result
-                st.success("✅ Login successful")
-                st.rerun()
-            else:
-                st.error("Invalid credentials")
+        view = pdk.ViewState(
+            latitude=9.0820,
+            longitude=8.6753,
+            zoom=6
+        )
 
-# -----------------------------
-# MAIN APP
-# -----------------------------
-else:
+        with placeholder.container():
+            st.pydeck_chart(pdk.Deck(
+                layers=[scatter, line_layer],
+                initial_view_state=view,
+                tooltip={"text": "{label}"}
+            ))
 
-    username = st.session_state.user[1]
-
-    st.sidebar.write(f"👤 {username}")
-
-    if st.sidebar.button("Logout"):
-        st.session_state.user = None
-        st.rerun()
-
-    menu = st.sidebar.selectbox("Menu", ["Report Incident", "Dashboard"])
-
-    # REPORT
-    if menu == "Report Incident":
-        st.subheader("📍 Report Emergency")
-
-        incident = st.selectbox("Incident", [
-            "Road Accident", "Fire", "Flood",
-            "Kidnapping", "Vandalism"
-        ])
-
-        desc = st.text_area("Description")
-        lat = st.number_input("Latitude", value=9.0820)
-        lon = st.number_input("Longitude", value=8.6753)
-
-        st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
-
-        if st.button("Submit Report"):
-            if desc:
-                agency = route_agency(incident)
-
-                c.execute("""
-                    INSERT INTO reports 
-                    (incident, agency, description, lat, lon, user, time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    incident,
-                    agency,
-                    desc,
-                    lat,
-                    lon,
-                    username,
-                    datetime.now().strftime("%Y-%m-%d %H:%M")
-                ))
-                conn.commit()
-
-                message = f"{incident} at ({lat},{lon}) by {username}"
-                status = send_alert(agency, message)
-
-                st.success(f"✅ Sent to {agency}")
-                st.info(f"Alert: {status}")
-            else:
-                st.warning("Enter description")
-
-    # DASHBOARD
-    elif menu == "Dashboard":
-        df = pd.read_sql("SELECT * FROM reports", conn)
-        st.dataframe(df, use_container_width=True)
-
-        if not df.empty:
-            st.map(df)
+        time.sleep(2)
