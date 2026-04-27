@@ -87,48 +87,47 @@ def auto_assign(report_id, lat, lon):
     return assigned
 
 # -------------------------
-# GPS FUNCTION
-# -------------------------
-def gps_component():
-    components.html(
-        """
-        <script>
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const coords = {
-                    lat: pos.coords.latitude,
-                    lon: pos.coords.longitude
-                };
-                window.parent.postMessage(JSON.stringify(coords), "*");
-            },
-            (err) => {
-                window.parent.postMessage(JSON.stringify({error: err.message}), "*");
-            }
-        );
-        </script>
-        """,
-        height=0,
-    )
-
-# -------------------------
 # UI
 # -------------------------
+st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
+
 st.title("🚨 RescueNet Nigeria 🇳🇬")
 st.markdown("### Smart Emergency & Dispatch System")
 
 menu = st.sidebar.selectbox("Menu", ["Report Incident", "Add Agent", "Dashboard"])
 
 # -------------------------
-# REPORT INCIDENT (GPS)
+# REPORT INCIDENT (GPS + FALLBACK)
 # -------------------------
 if menu == "Report Incident":
 
-    st.subheader("📍 Auto Detect Location")
+    st.subheader("📍 Location")
 
-    gps_component()
+    # Trigger GPS
+    if st.button("📡 Get My Location"):
+        components.html(
+            """
+            <script>
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const coords = {
+                        lat: pos.coords.latitude,
+                        lon: pos.coords.longitude
+                    };
+                    window.parent.postMessage(JSON.stringify(coords), "*");
+                },
+                (err) => {
+                    window.parent.postMessage(JSON.stringify({error: err.message}), "*");
+                }
+            );
+            </script>
+            """,
+            height=0,
+        )
 
     location_data = st.text_input("GPS Data", key="gps")
 
+    # Listener
     components.html(
         """
         <script>
@@ -152,12 +151,15 @@ if menu == "Report Incident":
             lat = coords.get("lat")
             lon = coords.get("lon")
     except:
-        pass
+        lat, lon = None, None
 
+    # Fallback
     if lat and lon:
-        st.success(f"📍 Location: {lat}, {lon}")
+        st.success(f"📍 Location detected: {lat}, {lon}")
     else:
-        st.warning("⚠ Allow location access")
+        st.warning("⚠ GPS not detected — enter manually")
+        lat = st.number_input("Latitude", value=9.0820)
+        lon = st.number_input("Longitude", value=8.6753)
 
     incident = st.selectbox("Incident Type", [
         "Road Accident",
@@ -169,8 +171,8 @@ if menu == "Report Incident":
 
     if st.button("🚨 Submit Report"):
 
-        if not lat or not lon:
-            st.error("❌ Location not detected")
+        if lat is None or lon is None:
+            st.error("❌ Location required")
         else:
             priority = get_priority(incident)
 
@@ -227,6 +229,7 @@ elif menu == "Dashboard":
         points = []
         lines = []
 
+        # MOVE AGENTS
         for _, a in agents.iterrows():
 
             if a["report_id"]:
@@ -259,6 +262,7 @@ elif menu == "Dashboard":
 
         conn.commit()
 
+        # INCIDENTS
         for _, r in reports.iterrows():
 
             color = [255, 0, 0]
@@ -272,12 +276,7 @@ elif menu == "Dashboard":
                 "label": f"{r['incident']} (P{r['priority']})"
             })
 
-            if r["status"] != "Resolved":
-                if st.button(f"Resolve Report {r['id']}"):
-                    c.execute("UPDATE reports SET status='Resolved' WHERE id=?", (r["id"],))
-                    c.execute("UPDATE agents SET status='Available', report_id=NULL WHERE report_id=?", (r["id"],))
-                    conn.commit()
-
+        # MAP
         df = pd.DataFrame(points)
 
         scatter = pdk.Layer(
