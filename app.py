@@ -4,6 +4,8 @@ import pandas as pd
 import pydeck as pdk
 import math
 import time
+import json
+import streamlit.components.v1 as components
 
 # -------------------------
 # DATABASE
@@ -36,17 +38,16 @@ CREATE TABLE IF NOT EXISTS agents (
 conn.commit()
 
 # -------------------------
-# LOGIC FUNCTIONS
+# FUNCTIONS
 # -------------------------
 def get_priority(incident):
-    priority_map = {
+    return {
         "Kidnapping": 5,
         "Fire Outbreak": 5,
         "Road Accident": 4,
         "Flood": 3,
         "Critical National asset Vandalism": 4
-    }
-    return priority_map.get(incident, 2)
+    }.get(incident, 2)
 
 def distance(lat1, lon1, lat2, lon2):
     return math.sqrt((lat1 - lat2)**2 + (lon1 - lon2)**2)
@@ -59,9 +60,7 @@ def move(current, target, step=0.01):
     return current
 
 def calculate_eta(lat1, lon1, lat2, lon2):
-    dist = distance(lat1, lon1, lat2, lon2)
-    speed = 0.02
-    return round(dist / speed, 2)
+    return round(distance(lat1, lon1, lat2, lon2) / 0.02, 2)
 
 def auto_assign(report_id, lat, lon):
     agents = pd.read_sql("SELECT * FROM agents WHERE status='Available'", conn)
@@ -88,20 +87,79 @@ def auto_assign(report_id, lat, lon):
     return assigned
 
 # -------------------------
-# UI HEADER
+# GPS FUNCTION
+# -------------------------
+def gps_component():
+    components.html(
+        """
+        <script>
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const coords = {
+                    lat: pos.coords.latitude,
+                    lon: pos.coords.longitude
+                };
+                window.parent.postMessage(JSON.stringify(coords), "*");
+            },
+            (err) => {
+                window.parent.postMessage(JSON.stringify({error: err.message}), "*");
+            }
+        );
+        </script>
+        """,
+        height=0,
+    )
+
+# -------------------------
+# UI
 # -------------------------
 st.title("🚨 RescueNet Nigeria 🇳🇬")
+st.markdown("### Smart Emergency & Dispatch System")
 
 menu = st.sidebar.selectbox("Menu", ["Report Incident", "Add Agent", "Dashboard"])
 
 # -------------------------
-# REPORT INCIDENT
+# REPORT INCIDENT (GPS)
 # -------------------------
 if menu == "Report Incident":
 
-    st.subheader("Report Emergency")
+    st.subheader("📍 Auto Detect Location")
 
-    incident = st.selectbox("Select Incident", [
+    gps_component()
+
+    location_data = st.text_input("GPS Data", key="gps")
+
+    components.html(
+        """
+        <script>
+        window.addEventListener("message", (event) => {
+            const input = window.parent.document.querySelector('input[aria-label="GPS Data"]');
+            if (input) {
+                input.value = event.data;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        </script>
+        """,
+        height=0,
+    )
+
+    lat, lon = None, None
+
+    try:
+        if location_data:
+            coords = json.loads(location_data)
+            lat = coords.get("lat")
+            lon = coords.get("lon")
+    except:
+        pass
+
+    if lat and lon:
+        st.success(f"📍 Location: {lat}, {lon}")
+    else:
+        st.warning("⚠ Allow location access")
+
+    incident = st.selectbox("Incident Type", [
         "Road Accident",
         "Fire Outbreak",
         "Flood",
@@ -109,48 +167,46 @@ if menu == "Report Incident":
         "Critical National asset Vandalism"
     ])
 
-    lat = st.number_input("Latitude", value=9.0820)
-    lon = st.number_input("Longitude", value=8.6753)
+    if st.button("🚨 Submit Report"):
 
-    if st.button("Submit Report"):
-
-        priority = get_priority(incident)
-
-        c.execute("""
-            INSERT INTO reports (incident, lat, lon, status, priority)
-            VALUES (?, ?, ?, ?, ?)
-        """, (incident, lat, lon, "Pending", priority))
-
-        report_id = c.lastrowid
-        conn.commit()
-
-        assigned = auto_assign(report_id, lat, lon)
-
-        st.success("✅ Incident Reported")
-
-        if assigned:
-            st.success(f"🚓 Assigned: {', '.join(assigned)}")
+        if not lat or not lon:
+            st.error("❌ Location not detected")
         else:
-            st.warning("⚠ No available agents")
+            priority = get_priority(incident)
+
+            c.execute("""
+                INSERT INTO reports (incident, lat, lon, status, priority)
+                VALUES (?, ?, ?, ?, ?)
+            """, (incident, lat, lon, "Pending", priority))
+
+            report_id = c.lastrowid
+            conn.commit()
+
+            assigned = auto_assign(report_id, lat, lon)
+
+            st.success("✅ Incident Reported")
+
+            if assigned:
+                st.success(f"🚓 Assigned: {', '.join(assigned)}")
+            else:
+                st.warning("⚠ No available agents")
 
 # -------------------------
 # ADD AGENT
 # -------------------------
 elif menu == "Add Agent":
 
-    st.subheader("Add Response Agent")
+    st.subheader("Add Agent")
 
     name = st.text_input("Agent Name")
-
-    lat = st.number_input("Start Latitude", value=9.0820)
-    lon = st.number_input("Start Longitude", value=8.6753)
+    lat = st.number_input("Latitude", value=9.0820)
+    lon = st.number_input("Longitude", value=8.6753)
 
     if st.button("Add Agent"):
         c.execute("""
             INSERT INTO agents (name, lat, lon, status, report_id)
-            VALUES (?, ?, ?, ?, NULL)
-        """, (name, lat, lon, "Available"))
-
+            VALUES (?, ?, ?, 'Available', NULL)
+        """, (name, lat, lon))
         conn.commit()
         st.success("✅ Agent Added")
 
@@ -159,7 +215,7 @@ elif menu == "Add Agent":
 # -------------------------
 elif menu == "Dashboard":
 
-    st.subheader("📡 Live Dispatch Map")
+    st.subheader("📡 Live Tracking Dashboard")
 
     placeholder = st.empty()
 
@@ -171,7 +227,6 @@ elif menu == "Dashboard":
         points = []
         lines = []
 
-        # MOVE AGENTS
         for _, a in agents.iterrows():
 
             if a["report_id"]:
@@ -204,8 +259,8 @@ elif menu == "Dashboard":
 
         conn.commit()
 
-        # INCIDENT POINTS
         for _, r in reports.iterrows():
+
             color = [255, 0, 0]
             if r["status"] == "Resolved":
                 color = [0, 200, 0]
@@ -216,6 +271,12 @@ elif menu == "Dashboard":
                 "color": color,
                 "label": f"{r['incident']} (P{r['priority']})"
             })
+
+            if r["status"] != "Resolved":
+                if st.button(f"Resolve Report {r['id']}"):
+                    c.execute("UPDATE reports SET status='Resolved' WHERE id=?", (r["id"],))
+                    c.execute("UPDATE agents SET status='Available', report_id=NULL WHERE report_id=?", (r["id"],))
+                    conn.commit()
 
         df = pd.DataFrame(points)
 
@@ -237,11 +298,7 @@ elif menu == "Dashboard":
             get_width=2,
         )
 
-        view = pdk.ViewState(
-            latitude=9.0820,
-            longitude=8.6753,
-            zoom=6
-        )
+        view = pdk.ViewState(latitude=9.0820, longitude=8.6753, zoom=6)
 
         with placeholder.container():
             st.pydeck_chart(pdk.Deck(
