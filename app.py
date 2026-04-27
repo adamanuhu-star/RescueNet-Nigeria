@@ -87,7 +87,25 @@ def auto_assign(report_id, lat, lon):
     return assigned
 
 # -------------------------
-# UI
+# GOOGLE MAP ROUTE
+# -------------------------
+def google_route(lat1, lon1, lat2, lon2, key):
+    return f"""
+    <iframe
+        width="100%"
+        height="400"
+        style="border:0"
+        loading="lazy"
+        allowfullscreen
+        src="https://www.google.com/maps/embed/v1/directions?key={key}
+        &origin={lat1},{lon1}
+        &destination={lat2},{lon2}
+        &mode=driving&departure_time=now">
+    </iframe>
+    """
+
+# -------------------------
+# UI CONFIG
 # -------------------------
 st.set_page_config(page_title="RescueNet Nigeria", layout="wide")
 
@@ -96,14 +114,15 @@ st.markdown("### Smart Emergency & Dispatch System")
 
 menu = st.sidebar.selectbox("Menu", ["Report Incident", "Add Agent", "Dashboard"])
 
+api_key = st.sidebar.text_input("Google Maps API Key (optional)", type="password")
+
 # -------------------------
-# REPORT INCIDENT (GPS + FALLBACK)
+# REPORT INCIDENT
 # -------------------------
 if menu == "Report Incident":
 
-    st.subheader("📍 Location")
+    st.subheader("📍 Location Detection")
 
-    # Trigger GPS
     if st.button("📡 Get My Location"):
         components.html(
             """
@@ -127,7 +146,6 @@ if menu == "Report Incident":
 
     location_data = st.text_input("GPS Data", key="gps")
 
-    # Listener
     components.html(
         """
         <script>
@@ -151,11 +169,10 @@ if menu == "Report Incident":
             lat = coords.get("lat")
             lon = coords.get("lon")
     except:
-        lat, lon = None, None
+        pass
 
-    # Fallback
     if lat and lon:
-        st.success(f"📍 Location detected: {lat}, {lon}")
+        st.success(f"📍 Location: {lat}, {lon}")
     else:
         st.warning("⚠ GPS not detected — enter manually")
         lat = st.number_input("Latitude", value=9.0820)
@@ -217,7 +234,7 @@ elif menu == "Add Agent":
 # -------------------------
 elif menu == "Dashboard":
 
-    st.subheader("📡 Live Tracking Dashboard")
+    st.subheader("📡 Live Dispatch Dashboard")
 
     placeholder = st.empty()
 
@@ -262,7 +279,7 @@ elif menu == "Dashboard":
 
         conn.commit()
 
-        # INCIDENTS
+        # INCIDENT POINTS
         for _, r in reports.iterrows():
 
             color = [255, 0, 0]
@@ -305,5 +322,18 @@ elif menu == "Dashboard":
                 initial_view_state=view,
                 tooltip={"text": "{label}"}
             ))
+
+        # GOOGLE MAP ROUTE (REAL)
+        if api_key and len(agents) > 0 and len(reports) > 0:
+            a = agents.iloc[0]
+            r = reports.iloc[0]
+
+            st.markdown("### 🗺 Real Route (Google Maps)")
+            route_html = google_route(
+                a["lat"], a["lon"],
+                r["lat"], r["lon"],
+                api_key
+            )
+            components.html(route_html, height=400)
 
         time.sleep(2)
